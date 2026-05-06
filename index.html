@@ -375,7 +375,7 @@ let gdriveToken = null;
 let gdriveConnected = false;
 
 // Google OAuth2 config
-const GDRIVE_CLIENT_ID = 'YOUR_GOOGLE_CLIENT_ID'; // Replace with your OAuth2 client ID
+const GDRIVE_CLIENT_ID = '510292526417-oodof4b1lvu2cr7tebjrm9iblce8n79r.apps.googleusercontent.com';
 const GDRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.file';
 
 /* --- IndexedDB init --- */
@@ -510,8 +510,9 @@ function buildPhotoCard(photo) {
    ============================================================ */
 function onDragStart(e) {
   dragSrcId = parseInt(this.dataset.id);
-  this.classList.add('dragging');
+  e.dataTransfer.setData('text/plain', String(dragSrcId));
   e.dataTransfer.effectAllowed = 'move';
+  this.classList.add('dragging');
 }
 function onDragOver(e) {
   e.preventDefault();
@@ -521,39 +522,38 @@ function onDragOver(e) {
 }
 function onDragLeave() { this.classList.remove('drag-over'); }
 function onDragEnd() {
-  document.querySelectorAll('.photo-item').forEach(el => {
-    el.classList.remove('dragging', 'drag-over');
-  });
-  dragSrcId = null;
+  document.querySelectorAll('.photo-item').forEach(el => el.classList.remove('dragging', 'drag-over'));
 }
-async function onDrop(e) {
+function onDrop(e) {
   e.preventDefault();
+  const srcId = parseInt(e.dataTransfer.getData('text/plain') || String(dragSrcId));
   const targetId = parseInt(this.dataset.id);
-  if (!dragSrcId || dragSrcId === targetId) return;
+  dragSrcId = null;
+  document.querySelectorAll('.photo-item').forEach(el => el.classList.remove('dragging', 'drag-over'));
+  if (!srcId || srcId === targetId) return;
+  reorderPhotos(srcId, targetId);
+}
 
-  // Reorder in DB
+function reorderPhotos(srcId, targetId) {
   const tx = db.transaction('photos', 'readonly');
   const allReq = tx.objectStore('photos').getAll();
-  allReq.onsuccess = async () => {
+  allReq.onsuccess = () => {
     let photos = allReq.result
       .filter(p => p.interventionId === currentId)
       .sort((a, b) => (a.order || a.id) - (b.order || b.id));
 
-    const srcIdx = photos.findIndex(p => p.id === dragSrcId);
+    const srcIdx = photos.findIndex(p => p.id === srcId);
     const tgtIdx = photos.findIndex(p => p.id === targetId);
     if (srcIdx === -1 || tgtIdx === -1) return;
 
     const [moved] = photos.splice(srcIdx, 1);
     photos.splice(tgtIdx, 0, moved);
 
-    // Write new orders
     const tx2 = db.transaction('photos', 'readwrite');
     const store = tx2.objectStore('photos');
-    photos.forEach((p, i) => {
-      p.order = i * 10;
-      store.put(p);
-    });
-    tx2.oncomplete = () => loadPhotos(currentId);
+    photos.forEach((p, i) => { p.order = (i + 1) * 100; store.put(p); });
+    tx2.oncomplete = () => { loadPhotos(currentId); toast('↕️ Ordre sauvegardé'); };
+    tx2.onerror = () => toast('❌ Erreur sauvegarde ordre');
   };
 }
 
@@ -701,90 +701,110 @@ async function generateZip(photos, inv, clearAfter) {
 async function generatePDF(photos, inv) {
   showProgress('Génération du PDF…', 5);
   const { jsPDF } = window.jspdf;
-  const doc = new jsPDF({ unit: 'mm', format: 'a4' });
-  const W = doc.internal.pageSize.getWidth();
-  const H = doc.internal.pageSize.getHeight();
-  const margin = 15;
-  const usableW = W - margin * 2;
+  const doc = new jsPDF({ unit: 'mm', format: 'a4', orientation: 'portrait' });
+  const W = doc.internal.pageSize.getWidth();   // 210
+  const H = doc.internal.pageSize.getHeight();  // 297
+  const margin = 12;
+  const usableW = W - margin * 2;               // 186
 
-  // --- Cover page ---
+  /* ---- PAGE DE COUVERTURE ---- */
   doc.setFillColor(12, 15, 22);
   doc.rect(0, 0, W, H, 'F');
   doc.setFillColor(255, 107, 43);
-  doc.rect(0, 0, 6, H, 'F');
-  doc.setTextColor(255, 107, 43);
-  doc.setFontSize(9);
-  doc.setFont('helvetica', 'bold');
-  doc.text('RAPPORT D\'INTERVENTION', margin + 4, 40);
-  doc.setTextColor(255, 255, 255);
-  doc.setFontSize(26);
-  doc.text(inv.client, margin + 4, 58, { maxWidth: usableW - 4 });
-  doc.setFontSize(13);
-  doc.setTextColor(180, 180, 180);
-  doc.text(`N° ${inv.num}`, margin + 4, 72);
-  doc.text(`Date : ${formatDate(inv.date)}`, margin + 4, 80);
-  doc.text(`${photos.length} photo${photos.length > 1 ? 's' : ''}`, margin + 4, 88);
-  doc.setFillColor(30, 35, 50);
-  doc.rect(margin + 4, 110, usableW - 4, 0.4, 'F');
-  doc.setFontSize(8);
-  doc.setTextColor(120, 120, 120);
-  doc.text('Généré par InterventionPro', margin + 4, 120);
+  doc.rect(0, 0, 7, H, 'F');
 
-  // --- Photo pages ---
-  const photosPerPage = 2;
-  const imgH = 75;
-  const colW = (usableW - 8) / 2;
+  doc.setTextColor(255, 107, 43);
+  doc.setFontSize(8);
+  doc.setFont('helvetica', 'bold');
+  doc.text('RAPPORT D\'INTERVENTION', margin + 6, 50);
+
+  doc.setTextColor(255, 255, 255);
+  doc.setFontSize(28);
+  doc.text(inv.client, margin + 6, 68, { maxWidth: usableW - 6 });
+
+  doc.setFontSize(13);
+  doc.setTextColor(170, 170, 170);
+  doc.text(`Intervention N° ${inv.num}`, margin + 6, 84);
+  doc.text(`Date : ${formatDate(inv.date)}`, margin + 6, 93);
+  doc.text(`${photos.length} photo${photos.length > 1 ? 's' : ''}`, margin + 6, 102);
+
+  doc.setDrawColor(50, 55, 70);
+  doc.setLineWidth(0.3);
+  doc.line(margin + 6, 115, W - margin, 115);
+
+  doc.setFontSize(7.5);
+  doc.setTextColor(90, 95, 110);
+  doc.text('Généré par InterventionPro', margin + 6, 123);
+
+  /* ---- UNE PHOTO PAR PAGE ---- */
+  // Zone image : de y=18 à y=230 → hauteur 212mm (plein cadre vertical)
+  const imgAreaY = 18;
+  const imgAreaH = 212;
+  const captionY  = imgAreaY + imgAreaH + 7;  // 237
+  const commentY  = captionY + 7;             // 244
 
   for (let i = 0; i < photos.length; i++) {
-    setProgress(10 + Math.round((i / photos.length) * 85), `Photo ${i+1}/${photos.length}…`);
+    setProgress(10 + Math.round((i / photos.length) * 87), `Photo ${i + 1}/${photos.length}…`);
+    doc.addPage();
 
-    if (i % photosPerPage === 0) {
-      doc.addPage();
-      // Page header
-      doc.setFillColor(12, 15, 22);
-      doc.rect(0, 0, W, H, 'F');
-      doc.setFillColor(255, 107, 43);
-      doc.rect(0, 0, W, 10, 'F');
-      doc.setTextColor(255, 255, 255);
-      doc.setFontSize(7);
-      doc.setFont('helvetica', 'bold');
-      doc.text(`${inv.num} — ${inv.client}`, margin, 6.5);
-      doc.text(`Page ${Math.floor(i / photosPerPage) + 2}`, W - margin, 6.5, { align: 'right' });
-    }
+    /* Fond sombre */
+    doc.setFillColor(12, 15, 22);
+    doc.rect(0, 0, W, H, 'F');
 
-    const col = i % 2;
-    const row = Math.floor((i % photosPerPage) / 2);
-    const x = margin + col * (colW + 8);
-    const y = 20 + row * (imgH + 45);
+    /* Bandeau header */
+    doc.setFillColor(255, 107, 43);
+    doc.rect(0, 0, W, 12, 'F');
+    doc.setTextColor(255, 255, 255);
+    doc.setFontSize(7);
+    doc.setFont('helvetica', 'bold');
+    doc.text(`${inv.num} — ${inv.client}`, margin, 8);
+    doc.text(`${i + 1} / ${photos.length}`, W - margin, 8, { align: 'right' });
 
-    // Add image
+    /* Image — pleine largeur, proportion conservée */
     try {
       const imgData = photos[i].data;
       const fmt = imgData.startsWith('data:image/png') ? 'PNG' : 'JPEG';
-      doc.addImage(imgData, fmt, x, y, colW, imgH, undefined, 'MEDIUM');
-    } catch(err) {
+
+      // Calculer les dimensions réelles pour conserver le ratio
+      const tmpImg = new Image();
+      await new Promise(res => { tmpImg.onload = res; tmpImg.src = imgData; });
+      const ratio = tmpImg.naturalWidth / tmpImg.naturalHeight;
+      let drawW = usableW;
+      let drawH = drawW / ratio;
+      if (drawH > imgAreaH) { drawH = imgAreaH; drawW = drawH * ratio; }
+      const drawX = margin + (usableW - drawW) / 2;
+
+      doc.addImage(imgData, fmt, drawX, imgAreaY, drawW, drawH, undefined, 'FAST');
+
+      /* Légende */
+      const caption = photos[i].caption || `Photo ${i + 1}`;
+      doc.setFontSize(10);
+      doc.setFont('helvetica', 'bold');
+      doc.setTextColor(255, 107, 43);
+      doc.text(caption, margin, captionY, { maxWidth: usableW });
+
+      /* Commentaire */
+      const comment = photos[i].comment || '';
+      if (comment) {
+        doc.setFontSize(8.5);
+        doc.setFont('helvetica', 'normal');
+        doc.setTextColor(190, 190, 200);
+        const lines = doc.splitTextToSize(comment, usableW);
+        doc.text(lines.slice(0, 5), margin, commentY);
+      }
+
+    } catch (err) {
       doc.setFillColor(30, 35, 50);
-      doc.rect(x, y, colW, imgH, 'F');
+      doc.rect(margin, imgAreaY, usableW, imgAreaH, 'F');
+      doc.setTextColor(120, 120, 120);
+      doc.setFontSize(9);
+      doc.text('Image non disponible', W / 2, imgAreaY + imgAreaH / 2, { align: 'center' });
     }
 
-    // Caption & comment
-    let ty = y + imgH + 5;
-    const caption = photos[i].caption || `Photo ${i + 1}`;
-    const comment = photos[i].comment || '';
-
-    doc.setFontSize(9);
-    doc.setFont('helvetica', 'bold');
-    doc.setTextColor(255, 107, 43);
-    doc.text(caption, x, ty, { maxWidth: colW });
-    ty += 5;
-
-    if (comment) {
-      doc.setFontSize(7.5);
-      doc.setFont('helvetica', 'normal');
-      doc.setTextColor(180, 180, 180);
-      const lines = doc.splitTextToSize(comment, colW);
-      doc.text(lines.slice(0, 4), x, ty);
-    }
+    /* Numéro de page en bas */
+    doc.setFontSize(7);
+    doc.setTextColor(70, 75, 90);
+    doc.text(`Page ${i + 2}`, W / 2, H - 6, { align: 'center' });
   }
 
   setProgress(100, 'Téléchargement…');
@@ -808,11 +828,7 @@ function toggleGDrive() {
 }
 
 function connectGDrive() {
-  if (GDRIVE_CLIENT_ID === '510292526417-oodof4b1lvu2cr7tebjrm9iblce8n79r.apps.googleusercontent.com') {
-    toast('⚠️ Configurez votre Client ID Google dans le code');
-    alert('Pour activer Google Drive :\n1. Créez un projet sur console.cloud.google.com\n2. Activez l\'API Drive\n3. Créez des identifiants OAuth2 (web)\n4. Remplacez YOUR_GOOGLE_CLIENT_ID dans le code\n\nSans cela, l\'export ZIP & PDF fonctionnent normalement.');
-    return;
-  }
+
   const params = new URLSearchParams({
     client_id: GDRIVE_CLIENT_ID,
     redirect_uri: window.location.origin + window.location.pathname,
